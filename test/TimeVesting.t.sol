@@ -70,25 +70,40 @@ assertEq(token.balanceOf(beneficiary), 100 ether);
 
 
 function testPayerCancelRefundsUnvested() public {
-vm.startPrank(payer);
-uint256 total = 100 ether;
-token.approve(address(vest), total);
-uint256 start = block.timestamp;
-uint256 durationDays = 10;
-bytes32 id = vest.createScheduleAndDeposit(address(token), beneficiary, total, start, durationDays);
-vm.stopPrank();
+    uint256 total = 100 ether;
+    uint256 durationDays = 10;
+    uint256 start = block.timestamp;
 
+    // Mint + approve
+    vm.startPrank(payer);
+    token.approve(address(vest), total);
 
-// after 3 days, 30% vested
-vm.warp(start + 3 * 86400 + 1);
+    uint256 balBefore = token.balanceOf(payer);
 
+    // Create schedule
+    bytes32 id = vest.createScheduleAndDeposit(
+        address(token),
+        beneficiary,
+        total,
+        start,
+        durationDays
+    );
+    vm.stopPrank();
 
-// payer cancels; beneficiary keeps vested (30), payer gets remainder (70)
-vm.prank(payer);
-vest.cancelSchedule(id);
+    // After deposit payer has (balBefore - 100)
+    assertEq(token.balanceOf(payer), balBefore - total);
 
+    // Warp to day 3 (30% vested)
+    vm.warp(start + 3 days);
 
-assertEq(token.balanceOf(payer), 1_000 ether - 100 ether + 70 ether); // minted 1000, paid 100 then refunded 70
-assertEq(token.balanceOf(beneficiary), 30 ether);
+    // Cancel from payer
+    vm.prank(payer);
+    vest.cancelSchedule(id);
+
+    // Expected refund = 70 ether
+    assertEq(token.balanceOf(payer), balBefore - 100 ether + 70 ether);
+
+    // 30 ether remain locked in vesting contract
+    assertEq(token.balanceOf(address(vest)), 30 ether);
 }
 }
