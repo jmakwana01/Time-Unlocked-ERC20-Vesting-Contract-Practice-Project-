@@ -117,10 +117,10 @@ function testPayerCancelRefundsUnvested() public {
         uint256 durationDays,
         uint256 startDelay
     ) public {
-        // constrain fuzz values
+        // Bound fuzz inputs safely
         total = bound(total, 1 ether, 1_000 ether);
-        durationDays = bound(durationDays, 1, 365);     // 1 to 365 days
-        startDelay = bound(startDelay, 0, 10 days);     // start now → +10 days
+        durationDays = bound(durationDays, 1, 365);  // at least 1 day
+        startDelay = bound(startDelay, 0, 10 days);
 
         vm.startPrank(payer);
         token.approve(address(vest), total);
@@ -136,15 +136,16 @@ function testPayerCancelRefundsUnvested() public {
         );
         vm.stopPrank();
 
-        // Warp midway through vesting
-        uint256 warpDays = durationDays / 2;
+        // Warp to ALWAYS be at least 1 full vesting day
+        uint256 warpDays = bound(durationDays / 2, 1, durationDays);
+
         vm.warp(start + warpDays * 1 days);
 
         // Withdraw
         vm.prank(beneficiary);
         vest.withdraw(id);
 
-        // vested = total * (warpDays/durationDays)
+        // Expected vested:
         uint256 expected = (total * warpDays) / durationDays;
 
         assertApproxEqAbs(
