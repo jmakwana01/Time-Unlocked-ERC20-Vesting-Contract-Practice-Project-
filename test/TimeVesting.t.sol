@@ -106,4 +106,122 @@ function testPayerCancelRefundsUnvested() public {
     // 30 ether remain locked in vesting contract
     assertEq(token.balanceOf(address(vest)), 30 ether);
 }
+
+ /* -----------------------------------------------------------
+                        FUZZ TESTS
+    ----------------------------------------------------------- */
+
+    /// @notice Fuzz: any totalAmount, any durationDays, any start delay
+    function testFuzz_CreateAndWithdraw(
+        uint256 total,
+        uint256 durationDays,
+        uint256 startDelay
+    ) public {
+        // constrain fuzz values
+        total = bound(total, 1 ether, 1_000 ether);
+        durationDays = bound(durationDays, 1, 365);     // 1 to 365 days
+        startDelay = bound(startDelay, 0, 10 days);     // start now → +10 days
+
+        vm.startPrank(payer);
+        token.approve(address(vest), total);
+
+        uint256 start = block.timestamp + startDelay;
+
+        bytes32 id = vest.createScheduleAndDeposit(
+            address(token),
+            beneficiary,
+            total,
+            start,
+            durationDays
+        );
+        vm.stopPrank();
+
+        // Warp midway through vesting
+        uint256 warpDays = durationDays / 2;
+        vm.warp(start + warpDays * 1 days);
+
+        // Withdraw
+        vm.prank(beneficiary);
+        vest.withdraw(id);
+
+        // vested = total * (warpDays/durationDays)
+        uint256 expected = (total * warpDays) / durationDays;
+
+        assertApproxEqAbs(
+            token.balanceOf(beneficiary),
+            expected,
+            1 wei
+        );
+    }
+
+    /// @notice Fuzz: canceling schedule at random vested points
+    function testFuzz_CancelRefund(uint256 total, uint256 durationDays, uint256 warpDays) public {
+        total = bound(total, 10 ether, 1_000 ether);
+        durationDays = bound(durationDays, 1, 365);
+        warpDays = bound(warpDays, 0, durationDays);
+
+        vm.startPrank(payer);
+        token.approve(address(vest), total);
+
+        uint256 start = block.timestamp;
+        uint256 balBefore = token.balanceOf(payer);
+
+        bytes32 id = vest.createScheduleAndDeposit(
+            address(token),
+            beneficiary,
+            total,
+            start,
+            durationDays
+        );
+        vm.stopPrank();
+
+        // warp into vesting period
+        vm.warp(start + warpDays * 1 days);
+
+        // calculate expected
+        uint256 vested = (total * warpDays) / durationDays;
+        uint256 unvested = total - vested;
+
+        vm.prank(payer);
+        vest.cancelSchedule(id);
+
+        assertEq(token.balanceOf(payer), balBefore - total + unvested);
+        assertEq(token.balanceOf(address(vest)), vested);
+    }
+
+    /// @notice Fuzz: withdrawals can never exceed total vested amount
+    function testFuzz_WithdrawCannotExceedTotal(uint256 total, uint256 durationDays) public {
+        total = bound(total, 1 ether, 500 ether);
+        durationDays = bound(durationDays, 1, 100);
+
+        vm.startPrank(payer);
+        token.approve(address(vest), total);
+
+        uint256 start = block.timestamp;
+
+        bytes32 id = vest.createScheduleAndDeposit(
+            address(token),
+            beneficiary,
+            total,
+            start,
+            durationDays
+        );
+        vm.stopPrank();
+
+        // warp to fully vested
+        vm.warp(start + durationDays * 1 days);
+
+        // beneficiary withdraws FULL amount
+        vm.prank(beneficiary);
+        vest.withdraw(id);
+
+        // try withdrawing again: should revert
+        vm.expectRevert();
+        vm.prank(beneficiary);
+        vest.withdraw(id);
+
+        // balance must equal total
+        assertEq(token.balanceOf(beneficiary), total);
+    }
+
 }
